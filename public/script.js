@@ -15,7 +15,12 @@ chatForm.addEventListener('submit', async (e) => {
     userInput.value = '';
 
     try {
-        const response = await fetch('/api/chat', {
+        // Otomatis arahkan ke port 3000 jika dibuka dari Live Server (port 5500)
+        const apiUrl = (window.location.origin.includes(':5500') || window.location.protocol === 'file:')
+            ? 'http://localhost:3000/api/chat'
+            : '/api/chat';
+
+        const response = await fetch(apiUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ messages })

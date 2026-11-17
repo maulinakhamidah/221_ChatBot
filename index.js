@@ -1,3 +1,4 @@
+
 const express = require("express");
 const dotenv = require("dotenv");
 
@@ -7,6 +8,16 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
+
+// Izinkan akses dari Live Server (port 5500) atau origin lain (CORS)
+app.use((req, res, next) => {
+    res.header("Access-Control-Allow-Origin", "*");
+    res.header("Access-Control-Allow-Headers", "*");
+    res.header("Access-Control-Allow-Methods", "*");
+    if (req.method === "OPTIONS") return res.sendStatus(200);
+    next();
+});
+
 app.use(express.static("public"));
 
 app.get("/", (req, res) => {
@@ -112,7 +123,7 @@ app.post("/api/chat", async (req, res) => {
 
             for (const line of lines) {
                 const trimmedLine = line.trim();
-                
+
                 if (!trimmedLine) {
                     continue;
                 }
