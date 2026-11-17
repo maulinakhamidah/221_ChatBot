@@ -9,7 +9,7 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// Izinkan akses dari Live Server (port 5500) atau origin lain (CORS)
+// Izinkan CORS dari Live Server atau port lain
 app.use((req, res, next) => {
     res.header("Access-Control-Allow-Origin", "*");
     res.header("Access-Control-Allow-Headers", "*");
@@ -18,7 +18,7 @@ app.use((req, res, next) => {
     next();
 });
 
-// Sajikan folder public secara absolut agar index.html selalu ditemukan
+// Sajikan folder public secara absolut
 app.use(express.static(path.join(__dirname, "public")));
 
 app.get("/", (req, res) => {
@@ -35,137 +35,82 @@ app.post("/api/chat", async (req, res) => {
             });
         }
 
-        const apiKey = process.env.OPENAI_API_KEY;
+        const geminiApiKey = process.env.GEMINI_API_KEY || (process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.startsWith("AIza") ? process.env.OPENAI_API_KEY : null);
 
-        // Header untuk streaming teks
+        // Header untuk streaming teks langsung ke browser
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
         res.setHeader("Cache-Control", "no-cache");
         res.setHeader("Connection", "keep-alive");
 
-        // Jika API Key tidak ada atau belum diisi, gunakan AI publik gratis berkinerja tinggi
-        if (!apiKey || apiKey.trim() === "") {
+        // 1. JIKA MENGGUNAKAN GOOGLE GEMINI API
+        if (geminiApiKey) {
             try {
-                const aiResponse = await fetch("https://text.pollinations.ai/", {
+                const geminiContents = messages.map(m => ({
+                    role: m.role === "assistant" ? "model" : "user",
+                    parts: [{ text: m.content }]
+                }));
+
+                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey}`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
-                        messages: [
-                            { role: "system", content: "Anda adalah asisten AI Chatbot cerdas, ramah, dan membantu dalam bahasa Indonesia." },
-                            ...messages
-                        ]
+                        contents: geminiContents,
+                        systemInstruction: {
+                            parts: [{ text: "Anda adalah asisten AI Chatbot yang cerdas, sopan, serius, dan akurat dalam bahasa Indonesia." }]
+                        }
                     })
                 });
 
-                if (aiResponse.ok) {
-                    const aiText = await aiResponse.text();
-                    
-                    // Streaming efek mengetik per suku kata
-                    for (let i = 0; i < aiText.length; i += 4) {
-                        res.write(aiText.slice(i, i + 4));
-                        await new Promise(resolve => setTimeout(resolve, 20));
+                if (response.ok) {
+                    const data = await response.json();
+                    const reply = data.candidates?.[0]?.content?.parts?.[0]?.text || "Maaf, Gemini tidak dapat memberikan respon.";
+
+                    for (let i = 0; i < reply.length; i += 4) {
+                        res.write(reply.slice(i, i + 4));
+                        await new Promise(r => setTimeout(r, 15));
                     }
                     return res.end();
+                } else {
+                    const errText = await response.text();
+                    console.error("Gemini API Error:", errText);
                 }
-            } catch (freeAiErr) {
-                console.error("Free AI error:", freeAiErr);
+            } catch (geminiErr) {
+                console.error("Gemini Error:", geminiErr);
             }
-
-            // Fallback cadangan jika koneksi AI gagal
-            const lastMessage = messages[messages.length - 1]?.content || "";
-            const fallbackReply = `Halo! Saya menerima pesan Anda: "${lastMessage}". Ada yang bisa saya bantu lebih lanjut?`;
-            for (let i = 0; i < fallbackReply.length; i += 3) {
-                res.write(fallbackReply.slice(i, i + 3));
-                await new Promise(resolve => setTimeout(resolve, 20));
-            }
-            return res.end();
         }
 
-        // Jika API Key ada, gunakan OpenRouter
-        const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${apiKey}`
-            },
-            body: JSON.stringify({
-                model: "inclusionai/ling-3.0-tiny",
-                messages: messages,
-                temperature: 0.7,
-                stream: true
-            })
-        });
-
-        if (!response.ok) {
-            // Jika OpenRouter bermasalah, gunakan AI gratis sebagai cadangan
+        // 2. JIKA GEMINI API KEY BELUM DIMASUKKAN, GUNAKAN ENGINE AI CERDAS LANGSUNG
+        try {
             const aiResponse = await fetch("https://text.pollinations.ai/", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ messages })
+                body: JSON.stringify({
+                    messages: [
+                        { role: "system", content: "Anda adalah asisten AI Chatbot cerdas dan serius berbahasa Indonesia. Berikan jawaban yang tepat, informatif, dan akurat." },
+                        ...messages
+                    ]
+                })
             });
 
             if (aiResponse.ok) {
                 const aiText = await aiResponse.text();
                 for (let i = 0; i < aiText.length; i += 4) {
                     res.write(aiText.slice(i, i + 4));
-                    await new Promise(resolve => setTimeout(resolve, 20));
+                    await new Promise(r => setTimeout(r, 15));
                 }
                 return res.end();
             }
-
-            res.write("Halo! Server AI sedang memproses permintaan Anda.");
-            return res.end();
+        } catch (freeErr) {
+            console.error("AI Error:", freeErr);
         }
 
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder("utf-8");
-
-        let buffer = "";
-
-        while (true) {
-            const { done, value } = await reader.read();
-
-            if (done) {
-                break;
-            }
-
-            buffer += decoder.decode(value, { stream: true });
-
-            const lines = buffer.split("\n");
-            buffer = lines.pop();
-
-            for (const line of lines) {
-                const trimmedLine = line.trim();
-                
-                if (!trimmedLine || trimmedLine.startsWith(":")) {
-                    continue;
-                }
-
-                if (trimmedLine.startsWith("data: ")) {
-                    const data = trimmedLine.slice(6).trim();
-                    if (data === "[DONE]") continue;
-
-                    try {
-                        const json = JSON.parse(data);
-                        const content = json.choices[0].delta?.content;
-                        if (content) {
-                            res.write(content);
-                        }
-                    } catch (error) {
-                        // ignore parse error on partial lines
-                    }
-                }
-            }
-        }
-
+        res.write("Maaf, server AI sedang sibuk. Silakan coba kirim pesan Anda kembali.");
         res.end();
 
     } catch (error) {
         console.error("Server error:", error);
-
         if (!res.headersSent) {
-            res.status(500).json({
-                error: "Terjadi kesalahan pada server"
-            });
+            res.status(500).json({ error: "Terjadi kesalahan pada server" });
         } else {
             res.write("Terjadi kesalahan pada server");
             res.end();
