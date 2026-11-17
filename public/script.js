@@ -1,5 +1,4 @@
 
 
-let messages = [];
-
+chatForm.addEventListener('submit', async (e) => {
 
