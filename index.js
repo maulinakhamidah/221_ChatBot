@@ -1,6 +1,6 @@
-
 const express = require("express");
 const dotenv = require("dotenv");
+const path = require("path");
 
 dotenv.config();
 
@@ -18,10 +18,11 @@ app.use((req, res, next) => {
     next();
 });
 
-app.use(express.static("public"));
+// Sajikan folder public secara absolut agar index.html selalu ditemukan
+app.use(express.static(path.join(__dirname, "public")));
 
 app.get("/", (req, res) => {
-    res.redirect("/index.html");
+    res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
 app.post("/api/chat", async (req, res) => {
@@ -123,7 +124,7 @@ app.post("/api/chat", async (req, res) => {
 
             for (const line of lines) {
                 const trimmedLine = line.trim();
-
+                
                 if (!trimmedLine) {
                     continue;
                 }
