@@ -1,3 +1,5 @@
 
 
-const chatBox = document.getElementById('chat-box');
+let messages = [];
+
+
