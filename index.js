@@ -42,26 +42,41 @@ app.post("/api/chat", async (req, res) => {
         res.setHeader("Cache-Control", "no-cache");
         res.setHeader("Connection", "keep-alive");
 
-        // Jika API Key belum diatur, gunakan mode simulasi (fallback) agar chat tetap berjalan lancar
+        // Jika API Key tidak ada atau belum diisi, gunakan AI publik gratis berkinerja tinggi
         if (!apiKey || apiKey.trim() === "") {
+            try {
+                const aiResponse = await fetch("https://text.pollinations.ai/", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        messages: [
+                            { role: "system", content: "Anda adalah asisten AI Chatbot cerdas, ramah, dan membantu dalam bahasa Indonesia." },
+                            ...messages
+                        ]
+                    })
+                });
+
+                if (aiResponse.ok) {
+                    const aiText = await aiResponse.text();
+                    
+                    // Streaming efek mengetik per suku kata
+                    for (let i = 0; i < aiText.length; i += 4) {
+                        res.write(aiText.slice(i, i + 4));
+                        await new Promise(resolve => setTimeout(resolve, 20));
+                    }
+                    return res.end();
+                }
+            } catch (freeAiErr) {
+                console.error("Free AI error:", freeAiErr);
+            }
+
+            // Fallback cadangan jika koneksi AI gagal
             const lastMessage = messages[messages.length - 1]?.content || "";
-            let reply = "";
-
-            const lower = lastMessage.toLowerCase().trim();
-            if (lower === "p" || lower === "halo" || lower === "hai" || lower === "hi") {
-                reply = "Halo! Senang mengobrol dengan Anda. Ada yang bisa saya bantu?";
-            } else if (lower.includes("siapa")) {
-                reply = "Saya adalah asisten AI Chatbot virtual yang didukung oleh Express.js.";
-            } else {
-                reply = `Pesan Anda: "${lastMessage}" berhasil diterima! Server AI Chatbot aktif dan berfungsi dengan baik.`;
+            const fallbackReply = `Halo! Saya menerima pesan Anda: "${lastMessage}". Ada yang bisa saya bantu lebih lanjut?`;
+            for (let i = 0; i < fallbackReply.length; i += 3) {
+                res.write(fallbackReply.slice(i, i + 3));
+                await new Promise(resolve => setTimeout(resolve, 20));
             }
-
-            // Streaming teks per suku kata agar efek mengetik terlihat halus
-            for (let i = 0; i < reply.length; i += 3) {
-                res.write(reply.slice(i, i + 3));
-                await new Promise(resolve => setTimeout(resolve, 25));
-            }
-
             return res.end();
         }
 
@@ -81,14 +96,23 @@ app.post("/api/chat", async (req, res) => {
         });
 
         if (!response.ok) {
-            const errorData = await response.text();
-            console.error("OpenRouter Error:", errorData);
+            // Jika OpenRouter bermasalah, gunakan AI gratis sebagai cadangan
+            const aiResponse = await fetch("https://text.pollinations.ai/", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ messages })
+            });
 
-            const reply = "Halo! Server berhasil terhubung, namun OpenRouter sedang sibuk atau API Key memerlukan saldo. Server tetap siap digunakan!";
-            for (let i = 0; i < reply.length; i += 3) {
-                res.write(reply.slice(i, i + 3));
-                await new Promise(resolve => setTimeout(resolve, 25));
+            if (aiResponse.ok) {
+                const aiText = await aiResponse.text();
+                for (let i = 0; i < aiText.length; i += 4) {
+                    res.write(aiText.slice(i, i + 4));
+                    await new Promise(resolve => setTimeout(resolve, 20));
+                }
+                return res.end();
             }
+
+            res.write("Halo! Server AI sedang memproses permintaan Anda.");
             return res.end();
         }
 
