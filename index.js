@@ -1,8 +1,8 @@
 const express = require("express");
-const dotenv = require("dotenv");
 const path = require("path");
+const dotenv = require("dotenv");
 
-dotenv.config();
+dotenv.config({ path: path.join(__dirname, ".env") });
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -35,76 +35,74 @@ app.post("/api/chat", async (req, res) => {
             });
         }
 
-        const geminiApiKey = process.env.GEMINI_API_KEY || (process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.startsWith("AIza") ? process.env.OPENAI_API_KEY : null);
+        const apiKey = process.env.OPENAI_API_KEY || process.env.GEMINI_API_KEY;
 
-        // Header untuk streaming teks langsung ke browser
+        // Header streaming teks langsung ke browser
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
         res.setHeader("Cache-Control", "no-cache");
         res.setHeader("Connection", "keep-alive");
 
-        // 1. JIKA MENGGUNAKAN GOOGLE GEMINI API
-        if (geminiApiKey) {
-            try {
-                const geminiContents = messages.map(m => ({
-                    role: m.role === "assistant" ? "model" : "user",
-                    parts: [{ text: m.content }]
-                }));
-
-                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey}`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        contents: geminiContents,
-                        systemInstruction: {
-                            parts: [{ text: "Anda adalah asisten AI Chatbot yang cerdas, sopan, serius, dan akurat dalam bahasa Indonesia." }]
-                        }
-                    })
-                });
-
-                if (response.ok) {
-                    const data = await response.json();
-                    const reply = data.candidates?.[0]?.content?.parts?.[0]?.text || "Maaf, Gemini tidak dapat memberikan respon.";
-
-                    for (let i = 0; i < reply.length; i += 4) {
-                        res.write(reply.slice(i, i + 4));
-                        await new Promise(r => setTimeout(r, 15));
-                    }
-                    return res.end();
-                } else {
-                    const errText = await response.text();
-                    console.error("Gemini API Error:", errText);
-                }
-            } catch (geminiErr) {
-                console.error("Gemini Error:", geminiErr);
-            }
-        }
-
-        // 2. JIKA GEMINI API KEY BELUM DIMASUKKAN, GUNAKAN ENGINE AI CERDAS LANGSUNG
-        try {
-            const aiResponse = await fetch("https://text.pollinations.ai/", {
+        if (apiKey && apiKey.trim() !== "") {
+            // Gunakan OpenRouter dengan model canggih openai/gpt-4o-mini
+            const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${apiKey.trim()}`
+                },
                 body: JSON.stringify({
+                    model: "openai/gpt-4o-mini",
                     messages: [
-                        { role: "system", content: "Anda adalah asisten AI Chatbot cerdas dan serius berbahasa Indonesia. Berikan jawaban yang tepat, informatif, dan akurat." },
+                        { role: "system", content: "Anda adalah asisten AI Chatbot yang cerdas, serius, sopan, dan berpengetahuan luas dalam bahasa Indonesia. Berikan jawaban yang tepat, jelas, dan edukatif." },
                         ...messages
-                    ]
+                    ],
+                    temperature: 0.7,
+                    stream: true
                 })
             });
 
-            if (aiResponse.ok) {
-                const aiText = await aiResponse.text();
-                for (let i = 0; i < aiText.length; i += 4) {
-                    res.write(aiText.slice(i, i + 4));
-                    await new Promise(r => setTimeout(r, 15));
+            if (response.ok) {
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder("utf-8");
+                let buffer = "";
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split("\n");
+                    buffer = lines.pop();
+
+                    for (const line of lines) {
+                        const trimmed = line.trim();
+                        if (!trimmed || trimmed.startsWith(":")) continue;
+
+                        if (trimmed.startsWith("data: ")) {
+                            const data = trimmed.slice(6).trim();
+                            if (data === "[DONE]") continue;
+
+                            try {
+                                const json = JSON.parse(data);
+                                const text = json.choices[0]?.delta?.content;
+                                if (text) {
+                                    res.write(text);
+                                }
+                            } catch (e) {}
+                        }
+                    }
                 }
+
                 return res.end();
+            } else {
+                const err = await response.text();
+                console.error("OpenRouter API Error:", response.status, err);
             }
-        } catch (freeErr) {
-            console.error("AI Error:", freeErr);
         }
 
-        res.write("Maaf, server AI sedang sibuk. Silakan coba kirim pesan Anda kembali.");
+        // Cadangan jika API Key belum terpasang
+        const lastMsg = messages[messages.length - 1]?.content || "";
+        res.write(`Halo! Server aktif, namun API Key belum terbaca atau saldo habis. Pertanyaan Anda: "${lastMsg}".`);
         res.end();
 
     } catch (error) {
