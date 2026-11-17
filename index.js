@@ -1,17 +1,26 @@
-
 const express = require("express");
 const dotenv = require("dotenv");
+const path = require("path");
 
-dotenv.config();
+dotenv.config({ path: path.join(__dirname, ".env") });
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
-app.use(express.static("public"));
+app.use(express.static(path.join(__dirname, "public")));
+
+// CORS middleware agar bisa diakses dari Live Server (port 5500) maupun direct port 3000
+app.use((req, res, next) => {
+    res.header("Access-Control-Allow-Origin", "*");
+    res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+    res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    if (req.method === "OPTIONS") return res.sendStatus(200);
+    next();
+});
 
 app.get("/", (req, res) => {
-    res.redirect("/index.html");
+    res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
 app.post("/api/chat", async (req, res) => {
@@ -26,137 +35,106 @@ app.post("/api/chat", async (req, res) => {
 
         const apiKey = process.env.OPENAI_API_KEY;
 
-        // Jika API Key belum diatur, gunakan mode simulasi (fallback) agar chat tetap berjalan lancar
-        if (!apiKey || apiKey.trim() === "") {
-            res.setHeader("Content-Type", "text/event-stream");
-            res.setHeader("Cache-Control", "no-cache");
-            res.setHeader("Connection", "keep-alive");
-
-            const lastMessage = messages[messages.length - 1]?.content || "";
-            let reply = "";
-
-            const lower = lastMessage.toLowerCase().trim();
-            if (lower === "p" || lower === "halo" || lower === "hai") {
-                reply = "Halo! Ada yang bisa saya bantu hari ini?";
-            } else if (lower.includes("siapa")) {
-                reply = "Saya adalah AI Chatbot asisten virtual yang didukung oleh Express.js.";
-            } else {
-                reply = `Pesan Anda: "${lastMessage}" berhasil diterima! Server AI Chatbot aktif dan berfungsi dengan baik.`;
-            }
-
-            // Simulasi efek mengetik (streaming)
-            for (let i = 0; i < reply.length; i += 3) {
-                res.write(`data: ${reply.slice(i, i + 3)}\n\n`);
-                await new Promise(resolve => setTimeout(resolve, 25));
-            }
-
-            res.write("data: [DONE]\n\n");
-            return res.end();
-        }
-
-        // Jika API Key ada, gunakan OpenRouter
-        const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${apiKey}`
-            },
-            body: JSON.stringify({
-                model: "inclusionai/ling-3.0-tiny",
-                messages: messages,
-                temperature: 0.7,
-                stream: true
-            })
-        });
-
-        if (!response.ok) {
-            const errorData = await response.text();
-            console.error("OpenRouter Error:", errorData);
-
-            // Fallback jika API Key bermasalah agar tidak error di tampilan user
-            res.setHeader("Content-Type", "text/event-stream");
-            res.setHeader("Cache-Control", "no-cache");
-            res.setHeader("Connection", "keep-alive");
-
-            const reply = "Halo! Server berhasil terhubung, namun OpenRouter sedang sibuk atau API Key memerlukan saldo. Server tetap siap digunakan!";
-            for (let i = 0; i < reply.length; i += 3) {
-                res.write(`data: ${reply.slice(i, i + 3)}\n\n`);
-                await new Promise(resolve => setTimeout(resolve, 25));
-            }
-            res.write("data: [DONE]\n\n");
-            return res.end();
-        }
-
-        // Header untuk streaming (Server-Sent Events)
-        res.setHeader("Content-Type", "text/event-stream");
+        // Header streaming teks murni ke browser
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
         res.setHeader("Cache-Control", "no-cache");
         res.setHeader("Connection", "keep-alive");
 
+        // Jika API Key belum diset, fallback ke simulasi respons ramah
+        if (!apiKey || apiKey.trim() === "") {
+            const lastMessage = messages[messages.length - 1]?.content || "";
+            const reply = `Halo! Pesan Anda "${lastMessage}" telah diterima. Server Chatbot aktif dan siap digunakan.`;
+            for (let i = 0; i < reply.length; i += 3) {
+                res.write(reply.slice(i, i + 3));
+                await new Promise(resolve => setTimeout(resolve, 25));
+            }
+            return res.end();
+        }
+
+        // System prompt agar AI selalu ramah, cerdas, dan berbahasa Indonesia yang baik
+        const systemPrompt = {
+            role: "system",
+            content: "Kamu adalah asisten AI yang cerdas, sopan, dan ramah. Berikan jawaban yang akurat, jelas, dan mudah dipahami dalam bahasa Indonesia."
+        };
+
+        const chatPayload = [systemPrompt, ...messages];
+
+        // Fungsi pemanggilan OpenRouter
+        const callOpenRouter = async (modelName) => {
+            return fetch("https://openrouter.ai/api/v1/chat/completions", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${apiKey.trim()}`
+                },
+                body: JSON.stringify({
+                    model: modelName,
+                    messages: chatPayload,
+                    max_tokens: 1000,
+                    temperature: 0.7,
+                    stream: true
+                })
+            });
+        };
+
+        // Prioritaskan model Google Gemini 2.5 Flash, fallback ke OpenAI GPT-4o Mini
+        let response = await callOpenRouter("google/gemini-2.5-flash");
+        if (!response.ok) {
+            console.warn(`Model gemini-2.5-flash status ${response.status}, mencoba fallback ke openai/gpt-4o-mini...`);
+            response = await callOpenRouter("openai/gpt-4o-mini");
+        }
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error("OpenRouter Error:", errorText);
+            res.write("Maaf, layanan AI saat ini sedang sibuk. Silakan coba kirim pesan kembali.");
+            return res.end();
+        }
+
         const reader = response.body.getReader();
         const decoder = new TextDecoder("utf-8");
-
         let buffer = "";
 
         while (true) {
             const { done, value } = await reader.read();
-
-            if (done) {
-                break;
-            }
+            if (done) break;
 
             buffer += decoder.decode(value, { stream: true });
-
             const lines = buffer.split("\n");
-
-            // simpan bagian akhir karena mungkin belum lengkap
-            buffer = lines.pop();
+            buffer = lines.pop(); // simpan sisa baris yang belum selesai
 
             for (const line of lines) {
-                const trimmedLine = line.trim();
-
-                if (!trimmedLine) {
+                const trimmed = line.trim();
+                if (!trimmed || trimmed.startsWith(":") || !trimmed.startsWith("data: ")) {
                     continue;
                 }
 
-                if (trimmedLine.startsWith(":")) {
-                    continue; // Komentar keep-alive dari SSE
-                }
-
-                if (!trimmedLine.startsWith("data: ")) {
-                    continue;
-                }
-
-                const data = trimmedLine.slice(6).trim();
-
+                const data = trimmed.slice(6).trim();
                 if (data === "[DONE]") {
                     continue;
                 }
 
                 try {
                     const json = JSON.parse(data);
-                    const content = json.choices[0].delta?.content;
-
-                    if (content) {
-                        res.write(`data: ${content}\n\n`);
+                    const deltaContent = json.choices?.[0]?.delta?.content;
+                    if (deltaContent) {
+                        // Tulis langsung delta teks murni ke client (tanpa tambahan data: atau newline ganda)
+                        res.write(deltaContent);
                     }
-                } catch (error) {
-                    console.error("Gagal parsing streaming data:", error);
+                } catch (e) {
+                    // JSON parsing partial chunk - abaikan
                 }
             }
         }
 
-        res.write("data: [DONE]\n\n");
         res.end();
 
     } catch (error) {
         console.error("Server error:", error);
-
         if (!res.headersSent) {
-            res.status(500).json({
-                error: "Terjadi kesalahan pada server"
-            });
+            res.status(500).send("Terjadi kesalahan pada server.");
         } else {
-            res.write(`data: ${JSON.stringify("Terjadi kesalahan pada server")}\n\n`);
+            res.write("\n\n[Terjadi kesalahan saat memproses jawaban]");
             res.end();
         }
     }
