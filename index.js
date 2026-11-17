@@ -37,31 +37,31 @@ app.post("/api/chat", async (req, res) => {
 
         const apiKey = process.env.OPENAI_API_KEY;
 
+        // Header untuk streaming teks
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.setHeader("Cache-Control", "no-cache");
+        res.setHeader("Connection", "keep-alive");
+
         // Jika API Key belum diatur, gunakan mode simulasi (fallback) agar chat tetap berjalan lancar
         if (!apiKey || apiKey.trim() === "") {
-            res.setHeader("Content-Type", "text/event-stream");
-            res.setHeader("Cache-Control", "no-cache");
-            res.setHeader("Connection", "keep-alive");
-
             const lastMessage = messages[messages.length - 1]?.content || "";
             let reply = "";
 
             const lower = lastMessage.toLowerCase().trim();
-            if (lower === "p" || lower === "halo" || lower === "hai") {
-                reply = "Halo! Ada yang bisa saya bantu hari ini?";
+            if (lower === "p" || lower === "halo" || lower === "hai" || lower === "hi") {
+                reply = "Halo! Senang mengobrol dengan Anda. Ada yang bisa saya bantu?";
             } else if (lower.includes("siapa")) {
-                reply = "Saya adalah AI Chatbot asisten virtual yang didukung oleh Express.js.";
+                reply = "Saya adalah asisten AI Chatbot virtual yang didukung oleh Express.js.";
             } else {
                 reply = `Pesan Anda: "${lastMessage}" berhasil diterima! Server AI Chatbot aktif dan berfungsi dengan baik.`;
             }
 
-            // Simulasi efek mengetik (streaming)
+            // Streaming teks per suku kata agar efek mengetik terlihat halus
             for (let i = 0; i < reply.length; i += 3) {
-                res.write(`data: ${reply.slice(i, i + 3)}\n\n`);
+                res.write(reply.slice(i, i + 3));
                 await new Promise(resolve => setTimeout(resolve, 25));
             }
 
-            res.write("data: [DONE]\n\n");
             return res.end();
         }
 
@@ -84,24 +84,13 @@ app.post("/api/chat", async (req, res) => {
             const errorData = await response.text();
             console.error("OpenRouter Error:", errorData);
 
-            // Fallback jika API Key bermasalah agar tidak error di tampilan user
-            res.setHeader("Content-Type", "text/event-stream");
-            res.setHeader("Cache-Control", "no-cache");
-            res.setHeader("Connection", "keep-alive");
-
             const reply = "Halo! Server berhasil terhubung, namun OpenRouter sedang sibuk atau API Key memerlukan saldo. Server tetap siap digunakan!";
             for (let i = 0; i < reply.length; i += 3) {
-                res.write(`data: ${reply.slice(i, i + 3)}\n\n`);
+                res.write(reply.slice(i, i + 3));
                 await new Promise(resolve => setTimeout(resolve, 25));
             }
-            res.write("data: [DONE]\n\n");
             return res.end();
         }
-
-        // Header untuk streaming (Server-Sent Events)
-        res.setHeader("Content-Type", "text/event-stream");
-        res.setHeader("Cache-Control", "no-cache");
-        res.setHeader("Connection", "keep-alive");
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder("utf-8");
@@ -118,45 +107,32 @@ app.post("/api/chat", async (req, res) => {
             buffer += decoder.decode(value, { stream: true });
 
             const lines = buffer.split("\n");
-
-            // simpan bagian akhir karena mungkin belum lengkap
             buffer = lines.pop();
 
             for (const line of lines) {
                 const trimmedLine = line.trim();
                 
-                if (!trimmedLine) {
+                if (!trimmedLine || trimmedLine.startsWith(":")) {
                     continue;
                 }
 
-                if (trimmedLine.startsWith(":")) {
-                    continue; // Komentar keep-alive dari SSE
-                }
+                if (trimmedLine.startsWith("data: ")) {
+                    const data = trimmedLine.slice(6).trim();
+                    if (data === "[DONE]") continue;
 
-                if (!trimmedLine.startsWith("data: ")) {
-                    continue;
-                }
-
-                const data = trimmedLine.slice(6).trim();
-
-                if (data === "[DONE]") {
-                    continue;
-                }
-
-                try {
-                    const json = JSON.parse(data);
-                    const content = json.choices[0].delta?.content;
-
-                    if (content) {
-                        res.write(`data: ${content}\n\n`);
+                    try {
+                        const json = JSON.parse(data);
+                        const content = json.choices[0].delta?.content;
+                        if (content) {
+                            res.write(content);
+                        }
+                    } catch (error) {
+                        // ignore parse error on partial lines
                     }
-                } catch (error) {
-                    console.error("Gagal parsing streaming data:", error);
                 }
             }
         }
 
-        res.write("data: [DONE]\n\n");
         res.end();
 
     } catch (error) {
@@ -167,7 +143,7 @@ app.post("/api/chat", async (req, res) => {
                 error: "Terjadi kesalahan pada server"
             });
         } else {
-            res.write(`data: ${JSON.stringify("Terjadi kesalahan pada server")}\n\n`);
+            res.write("Terjadi kesalahan pada server");
             res.end();
         }
     }

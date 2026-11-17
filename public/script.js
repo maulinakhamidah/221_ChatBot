@@ -15,7 +15,6 @@ chatForm.addEventListener('submit', async (e) => {
     userInput.value = '';
 
     try {
-        // Otomatis arahkan ke port 3000 jika dibuka dari Live Server (port 5500)
         const apiUrl = (window.location.origin.includes(':5500') || window.location.protocol === 'file:')
             ? 'http://localhost:3000/api/chat'
             : '/api/chat';
@@ -37,7 +36,9 @@ chatForm.addEventListener('submit', async (e) => {
             const { done, value } = await reader.read();
             if (done) break;
             
-            const chunk = decoder.decode(value, { stream: true });
+            let chunk = decoder.decode(value, { stream: true });
+            // Bersihkan jika ada format sisa SSE
+            chunk = chunk.replace(/^data:\s*/gm, '').replace(/\[DONE\]/g, '');
             botReply += chunk;
             botMessageDiv.textContent = botReply;
             chatBox.scrollTop = chatBox.scrollHeight;
